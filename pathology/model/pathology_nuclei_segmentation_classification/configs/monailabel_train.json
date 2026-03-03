@@ -1,0 +1,782 @@
+{
+  "_meta_": {},
+  "imports": [
+    "$import glob",
+    "$import os",
+    "$import skimage"
+  ],
+  "bundle_root": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification",
+  "ckpt_dir_stage0": "$os.path.join(@bundle_root, 'models', 'stage0')",
+  "ckpt_dir_stage1": "$os.path.join(@bundle_root, 'models')",
+  "ckpt_path_stage0": "$os.path.join(@ckpt_dir_stage0, 'model.pt')",
+  "output_dir": "$os.path.join(@bundle_root, 'eval')",
+  "dataset_dir": "/workspace/Data/Pathology/CoNSeP/Prepared/",
+  "train_images": "$list(sorted(glob.glob(@dataset_dir + '/Train/*image.npy')))",
+  "val_images": "$list(sorted(glob.glob(@dataset_dir + '/Test/*image.npy')))",
+  "train_inst_map": "$list(sorted(glob.glob(@dataset_dir + '/Train/*inst_map.npy')))",
+  "val_inst_map": "$list(sorted(glob.glob(@dataset_dir + '/Test/*inst_map.npy')))",
+  "train_type_map": "$list(sorted(glob.glob(@dataset_dir + '/Train/*type_map.npy')))",
+  "val_type_map": "$list(sorted(glob.glob(@dataset_dir + '/Test/*type_map.npy')))",
+  "device": "cuda",
+  "stage": 0,
+  "epochs": 50,
+  "batch_size": 16,
+  "val_interval": 1,
+  "learning_rate": 0.0001,
+  "amp": true,
+  "hovernet_mode": "fast",
+  "patch_size": 256,
+  "out_size": 164,
+  "ckpt_dir": "$@ckpt_dir_stage0 if @stage == 0 else @ckpt_dir_stage1",
+  "network_def": {
+    "_target_": "HoVerNet",
+    "mode": "@hovernet_mode",
+    "in_channels": 3,
+    "out_classes": 5,
+    "adapt_standard_resnet": true,
+    "pretrained_url": null,
+    "freeze_encoder": true
+  },
+  "network": "$@network_def.to(@device)",
+  "loss": {
+    "_target_": "HoVerNetLoss",
+    "lambda_hv_mse": 1.0
+  },
+  "optimizer": {
+    "_target_": "torch.optim.Adam",
+    "params": "$filter(lambda p: p.requires_grad, @network.parameters())",
+    "lr": "@learning_rate",
+    "weight_decay": 1e-05
+  },
+  "lr_scheduler": {
+    "_target_": "torch.optim.lr_scheduler.StepLR",
+    "optimizer": "@optimizer",
+    "step_size": 25
+  },
+  "train": {
+    "preprocessing_transforms": [
+      {
+        "_target_": "LoadImaged",
+        "keys": [
+          "image",
+          "label_inst",
+          "label_type"
+        ]
+      },
+      {
+        "_target_": "EnsureChannelFirstd",
+        "keys": [
+          "image",
+          "label_inst",
+          "label_type"
+        ],
+        "channel_dim": -1
+      },
+      {
+        "_target_": "Lambdad",
+        "keys": "label_inst",
+        "func": "$lambda x: skimage.measure.label(x)"
+      },
+      {
+        "_target_": "RandAffined",
+        "keys": [
+          "image",
+          "label_inst",
+          "label_type"
+        ],
+        "prob": 1.0,
+        "rotate_range": [
+          "$np.pi"
+        ],
+        "scale_range": [
+          [
+            -0.2,
+            0.2
+          ],
+          [
+            -0.2,
+            0.2
+          ]
+        ],
+        "shear_range": [
+          [
+            -0.05,
+            0.05
+          ],
+          [
+            -0.05,
+            0.05
+          ]
+        ],
+        "translate_range": [
+          [
+            -6,
+            6
+          ],
+          [
+            -6,
+            6
+          ]
+        ],
+        "padding_mode": "zeros",
+        "mode": "nearest"
+      },
+      {
+        "_target_": "CenterSpatialCropd",
+        "keys": [
+          "image"
+        ],
+        "roi_size": [
+          "@patch_size",
+          "@patch_size"
+        ]
+      },
+      {
+        "_target_": "RandFlipd",
+        "keys": [
+          "image",
+          "label_inst",
+          "label_type"
+        ],
+        "prob": 0.5,
+        "spatial_axis": 0
+      },
+      {
+        "_target_": "RandFlipd",
+        "keys": [
+          "image",
+          "label_inst",
+          "label_type"
+        ],
+        "prob": 0.5,
+        "spatial_axis": 1
+      },
+      {
+        "_target_": "OneOf",
+        "transforms": [
+          {
+            "_target_": "RandGaussianSmoothd",
+            "keys": [
+              "image"
+            ],
+            "sigma_x": [
+              0.1,
+              1.1
+            ],
+            "sigma_y": [
+              0.1,
+              1.1
+            ],
+            "prob": 1.0
+          },
+          {
+            "_target_": "MedianSmoothd",
+            "keys": [
+              "image"
+            ],
+            "radius": 1
+          },
+          {
+            "_target_": "RandGaussianNoised",
+            "keys": [
+              "image"
+            ],
+            "std": 0.05,
+            "prob": 1.0
+          }
+        ]
+      },
+      {
+        "_target_": "CastToTyped",
+        "keys": "image",
+        "dtype": "$np.uint8"
+      },
+      {
+        "_target_": "TorchVisiond",
+        "keys": "image",
+        "name": "ColorJitter",
+        "brightness": [
+          0.9,
+          1.1
+        ],
+        "contrast": [
+          0.95,
+          1.1
+        ],
+        "saturation": [
+          0.8,
+          1.2
+        ],
+        "hue": [
+          -0.04,
+          0.04
+        ]
+      },
+      {
+        "_target_": "AsDiscreted",
+        "keys": "label_type",
+        "to_onehot": 5
+      },
+      {
+        "_target_": "ScaleIntensityRanged",
+        "keys": "image",
+        "a_min": 0.0,
+        "a_max": 255.0,
+        "b_min": 0.0,
+        "b_max": 1.0,
+        "clip": true
+      },
+      {
+        "_target_": "CastToTyped",
+        "keys": "label_inst",
+        "dtype": "$torch.int"
+      },
+      {
+        "_target_": "ComputeHoVerMapsd",
+        "keys": "label_inst"
+      },
+      {
+        "_target_": "Lambdad",
+        "keys": "label_inst",
+        "func": "$lambda x: x > 0",
+        "overwrite": "label"
+      },
+      {
+        "_target_": "CenterSpatialCropd",
+        "keys": [
+          "label",
+          "hover_label_inst",
+          "label_inst",
+          "label_type"
+        ],
+        "roi_size": [
+          "@out_size",
+          "@out_size"
+        ]
+      },
+      {
+        "_target_": "AsDiscreted",
+        "keys": "label",
+        "to_onehot": 2
+      },
+      {
+        "_target_": "CastToTyped",
+        "keys": [
+          "image",
+          "label_inst",
+          "label_type"
+        ],
+        "dtype": "$torch.float32"
+      }
+    ],
+    "preprocessing": {
+      "_target_": "Compose",
+      "transforms": "$@train#preprocessing_transforms"
+    },
+    "dataset": {
+      "_target_": "CacheDataset",
+      "data": [
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_000_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_000_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_000_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_001_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_001_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_001_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_002_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_002_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_002_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_003_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_003_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_003_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_004_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_004_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_004_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_005_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_005_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_005_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_006_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_006_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_006_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_007_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_007_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_007_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_008_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_008_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_008_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_009_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_009_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_009_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_010_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_010_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_010_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_011_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_011_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_011_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_012_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_012_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_012_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_013_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_013_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_013_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_014_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_014_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_014_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_015_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_015_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_015_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_016_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_016_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_016_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_017_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_017_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_017_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_018_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_018_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_018_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_019_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_019_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_019_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_020_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_020_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_020_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_021_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_021_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_021_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_022_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_022_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_022_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_023_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_023_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_023_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_024_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_024_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_024_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_025_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_025_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_025_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_026_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_026_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_026_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_027_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_027_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_027_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_028_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_028_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_028_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_029_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_029_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_029_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_030_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_030_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_030_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_031_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_031_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_031_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_032_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_032_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_032_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_033_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_033_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_033_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_034_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_034_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_034_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_035_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_035_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_035_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_036_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_036_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_036_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_037_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_037_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_037_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_038_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_038_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_038_type_map.npy"
+        }
+      ],
+      "transform": "@train#preprocessing",
+      "cache_rate": 1.0,
+      "num_workers": 4
+    },
+    "dataloader": {
+      "_target_": "DataLoader",
+      "dataset": "@train#dataset",
+      "batch_size": "@batch_size",
+      "shuffle": true,
+      "num_workers": 4
+    },
+    "inferer": {
+      "_target_": "SimpleInferer"
+    },
+    "postprocessing_np": {
+      "_target_": "Compose",
+      "transforms": [
+        {
+          "_target_": "Activationsd",
+          "keys": "nucleus_prediction",
+          "softmax": true
+        },
+        {
+          "_target_": "AsDiscreted",
+          "keys": "nucleus_prediction",
+          "argmax": true
+        }
+      ]
+    },
+    "postprocessing": {
+      "_target_": "Lambdad",
+      "keys": "pred",
+      "func": "$@train#postprocessing_np"
+    },
+    "handlers": [
+      {
+        "_target_": "LrScheduleHandler",
+        "lr_scheduler": "@lr_scheduler",
+        "print_lr": true
+      },
+      {
+        "_target_": "ValidationHandler",
+        "validator": "@validate#evaluator",
+        "epoch_level": true,
+        "interval": "@val_interval"
+      },
+      {
+        "_target_": "CheckpointSaver",
+        "save_dir": "@ckpt_dir",
+        "save_dict": {
+          "model": "@network"
+        },
+        "save_interval": 10,
+        "epoch_level": true,
+        "save_final": true,
+        "final_filename": "model.pt"
+      },
+      {
+        "_target_": "StatsHandler",
+        "tag_name": "train_loss",
+        "output_transform": "$monai.handlers.from_engine(['loss'], first=True)"
+      },
+      {
+        "_target_": "TensorBoardStatsHandler",
+        "log_dir": "@output_dir",
+        "tag_name": "train_loss",
+        "output_transform": "$monai.handlers.from_engine(['loss'], first=True)"
+      }
+    ],
+    "extra_handlers": [
+      {
+        "_target_": "CheckpointLoader",
+        "load_path": "$os.path.join(@ckpt_dir_stage0, 'model.pt')",
+        "load_dict": {
+          "model": "@network"
+        }
+      }
+    ],
+    "train_handlers": "$@train#extra_handlers + @train#handlers if @stage==1 else @train#handlers",
+    "key_metric": {
+      "train_mean_dice": {
+        "_target_": "MeanDice",
+        "include_background": false,
+        "output_transform": "$monai.apps.pathology.handlers.utils.from_engine_hovernet(keys=['pred', 'label'], nested_key='nucleus_prediction')"
+      }
+    },
+    "trainer": {
+      "_target_": "SupervisedTrainer",
+      "max_epochs": 50,
+      "device": "@device",
+      "train_data_loader": "@train#dataloader",
+      "prepare_batch": "$monai.apps.pathology.engines.utils.PrepareBatchHoVerNet(extra_keys=['label_type', 'hover_label_inst'])",
+      "network": "@network",
+      "loss_function": "@loss",
+      "optimizer": "@optimizer",
+      "inferer": "@train#inferer",
+      "postprocessing": "@train#postprocessing",
+      "key_train_metric": "@train#key_metric",
+      "train_handlers": "@train#train_handlers",
+      "amp": "@amp"
+    }
+  },
+  "validate": {
+    "preprocessing_transforms": [
+      {
+        "_target_": "LoadImaged",
+        "keys": [
+          "image",
+          "label_inst",
+          "label_type"
+        ]
+      },
+      {
+        "_target_": "EnsureChannelFirstd",
+        "keys": [
+          "image",
+          "label_inst",
+          "label_type"
+        ],
+        "channel_dim": -1
+      },
+      {
+        "_target_": "Lambdad",
+        "keys": "label_inst",
+        "func": "$lambda x: skimage.measure.label(x)"
+      },
+      {
+        "_target_": "CastToTyped",
+        "keys": [
+          "image",
+          "label_inst"
+        ],
+        "dtype": "$torch.int"
+      },
+      {
+        "_target_": "CenterSpatialCropd",
+        "keys": [
+          "image"
+        ],
+        "roi_size": [
+          "@patch_size",
+          "@patch_size"
+        ]
+      },
+      {
+        "_target_": "ScaleIntensityRanged",
+        "keys": "image",
+        "a_min": 0.0,
+        "a_max": 255.0,
+        "b_min": 0.0,
+        "b_max": 1.0,
+        "clip": true
+      },
+      {
+        "_target_": "ComputeHoVerMapsd",
+        "keys": "label_inst"
+      },
+      {
+        "_target_": "Lambdad",
+        "keys": "label_inst",
+        "func": "$lambda x: x > 0",
+        "overwrite": "label"
+      },
+      {
+        "_target_": "CenterSpatialCropd",
+        "keys": [
+          "label",
+          "hover_label_inst",
+          "label_inst",
+          "label_type"
+        ],
+        "roi_size": [
+          "@out_size",
+          "@out_size"
+        ]
+      },
+      {
+        "_target_": "CastToTyped",
+        "keys": [
+          "image",
+          "label_inst",
+          "label_type"
+        ],
+        "dtype": "$torch.float32"
+      }
+    ],
+    "preprocessing": {
+      "_target_": "Compose",
+      "transforms": "$@validate#preprocessing_transforms"
+    },
+    "dataset": {
+      "_target_": "CacheDataset",
+      "data": [
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_039_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_039_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_039_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_040_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_040_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_040_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_041_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_041_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_041_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_042_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_042_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_042_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_043_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_043_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_043_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_044_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_044_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_044_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_045_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_045_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_045_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_046_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_046_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_046_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_047_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_047_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_047_type_map.npy"
+        },
+        {
+          "image": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_048_image.npy",
+          "label_inst": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_048_inst_map.npy",
+          "label_type": "/app/apps/pathology/model/pathology_nuclei_segmentation_classification/cache/train_ds/nuclei_hovernet/train_1_0_0_1000_1000_0x0_048_type_map.npy"
+        }
+      ],
+      "transform": "@validate#preprocessing",
+      "cache_rate": 1.0,
+      "num_workers": 4
+    },
+    "dataloader": {
+      "_target_": "DataLoader",
+      "dataset": "@validate#dataset",
+      "batch_size": "@batch_size",
+      "shuffle": false,
+      "num_workers": 4
+    },
+    "inferer": {
+      "_target_": "SimpleInferer"
+    },
+    "postprocessing": "$@train#postprocessing",
+    "handlers": [
+      {
+        "_target_": "StatsHandler",
+        "iteration_log": false
+      },
+      {
+        "_target_": "TensorBoardStatsHandler",
+        "log_dir": "@output_dir",
+        "iteration_log": false
+      },
+      {
+        "_target_": "CheckpointSaver",
+        "save_dir": "@ckpt_dir",
+        "save_dict": {
+          "model": "@network"
+        },
+        "save_key_metric": true
+      }
+    ],
+    "key_metric": {
+      "val_mean_dice": {
+        "_target_": "MeanDice",
+        "include_background": false,
+        "output_transform": "$monai.apps.pathology.handlers.utils.from_engine_hovernet(keys=['pred', 'label'], nested_key='nucleus_prediction')"
+      }
+    },
+    "evaluator": {
+      "_target_": "SupervisedEvaluator",
+      "device": "@device",
+      "val_data_loader": "@validate#dataloader",
+      "prepare_batch": "$monai.apps.pathology.engines.utils.PrepareBatchHoVerNet(extra_keys=['label_type', 'hover_label_inst'])",
+      "network": "@network",
+      "inferer": "@validate#inferer",
+      "postprocessing": "@validate#postprocessing",
+      "key_val_metric": "@validate#key_metric",
+      "val_handlers": "@validate#handlers",
+      "amp": "@amp"
+    }
+  },
+  "initialize": [
+    "$monai.utils.set_determinism(seed=321)",
+    "$setattr(torch.backends.cudnn, 'benchmark', True)"
+  ],
+  "run": [
+    "$@train#trainer.run()"
+  ],
+  "tracking": "mlflow",
+  "experiment_name": "hovernet_nuclei"
+}

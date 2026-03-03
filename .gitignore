@@ -1,0 +1,24 @@
+datasets/
+*.pt
+*.pth
+*.onnx
+*.ckpt
+# Training outputs (TensorBoard, MLflow, eval results)
+eval/
+mlruns/
+mlflow.db
+
+# MONAI cache (preprocessed data)
+cache/
+*.npy
+
+# Binaries
+bin/
+
+# Logs
+*.log
+logs/
+
+__pycache__/
+*.pyc
+*.zip
