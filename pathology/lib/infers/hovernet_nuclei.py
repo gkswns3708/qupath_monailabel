@@ -9,10 +9,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import logging
-from typing import Any, Callable, Dict, Sequence
+import os
+from typing import Any, Callable, Dict, Optional, Sequence
 
 import numpy as np
-from lib.transforms import LoadImagePatchd, PostFilterLabeld
+from lib.transforms import BufferContoursd, LoadImagePatchd, PostFilterLabeld
 from monai.transforms import FromMetaTensord, LoadImaged, SaveImaged, SqueezeDimd
 
 from monailabel.interfaces.tasks.infer_v2 import InferType
@@ -28,7 +29,7 @@ class HovernetNuclei(BundleInferTask):
     This provides Inference Engine for pre-trained Hovernet segmentation + Classification model.
     """
 
-    def __init__(self, path: str, conf: Dict[str, str], **kwargs):
+    def __init__(self, path: str, conf: Dict[str, str], preset_checkpoint: Optional[str] = None, **kwargs):
         super().__init__(
             path,
             conf,
@@ -55,6 +56,15 @@ class HovernetNuclei(BundleInferTask):
         }
         self._config["label_colors"] = self.label_colors
 
+        # When a specific checkpoint is pre-selected, lock this task to that file.
+        # Removes model_filename from _config so _get_network() bypasses the
+        # user-selection branch and uses self.path directly.
+        if preset_checkpoint:
+            self._config.pop("model_filename", None)
+            checkpoint_path = os.path.join(path, "models", preset_checkpoint)
+            self.path = [checkpoint_path]
+            logger.info(f"HovernetNuclei preset checkpoint: {checkpoint_path}")
+
     def pre_transforms(self, data=None) -> Sequence[Callable]:
         t = [LoadImagePatchd(keys="image", mode="RGB", dtype=np.uint8, padding=False)]
         t.extend([x for x in super().pre_transforms(data)])
@@ -68,6 +78,7 @@ class HovernetNuclei(BundleInferTask):
                 SqueezeDimd(keys="pred", dim=0),
                 PostFilterLabeld(keys="pred"),
                 FindContoursd(keys="pred", labels=self.labels, max_poly_area=128 * 128),
+                BufferContoursd(keys="pred"),
             ]
         )
         return t
@@ -75,6 +86,7 @@ class HovernetNuclei(BundleInferTask):
     def info(self) -> Dict[str, Any]:
         d = super().info()
         d["pathology"] = True
+        d["description"] = "HoVerNet Nuclei Segmentation (Fast Mode)"
         return d
 
     def writer(self, data, extension=None, dtype=None):

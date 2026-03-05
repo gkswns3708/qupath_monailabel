@@ -23,7 +23,7 @@
     "val_interval": 1,
     "learning_rate": 0.0001,
     "amp": true,
-    "hovernet_mode": "fast",
+    "hovernet_mode": "fast", 
     "patch_size": 256,
     "out_size": 164,
     "ckpt_dir": "$@ckpt_dir_stage0 if @stage == 0 else @ckpt_dir_stage1",

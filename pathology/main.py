@@ -18,7 +18,7 @@ from typing import Dict
 import lib.configs
 from lib.activelearning.random import WSIRandom
 from lib.infers import NuClick
-from lib.transforms import LoadImagePatchd
+from lib.transforms import BufferContoursd, LoadImagePatchd
 
 import monailabel
 from monailabel.datastore.dsa import DSADatastore
@@ -155,7 +155,7 @@ class MyApp(MONAILabelApp):
                 dimension=2,
                 additional_info={"nuclick": True, "pathology": True},
                 image_loader=LoadImagePatchd(keys="image", padding=False),
-                post_trans=[FindContoursd(keys="pred")],
+                post_trans=[FindContoursd(keys="pred"), BufferContoursd(keys="pred")],
                 writer=PolygonWriter(),
                 config={"cache_image": False, "reset_state": True},
             )

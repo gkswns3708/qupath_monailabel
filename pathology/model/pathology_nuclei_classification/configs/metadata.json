@@ -1,0 +1,102 @@
+{
+    "schema": "https://github.com/Project-MONAI/MONAI-extra-test-data/releases/download/0.8.1/meta_schema_20220324.json",
+    "version": "0.2.0",
+    "changelog": {
+        "0.2.0": "update issue for IgniteInfo",
+        "0.1.9": "update tensorrt benchmark results",
+        "0.1.8": "enable tensorrt",
+        "0.1.7": "update to use monai 1.3.1",
+        "0.1.6": "set image_only to False",
+        "0.1.5": "add support for TensorRT conversion and inference",
+        "0.1.4": "fix the wrong GPU index issue of multi-node",
+        "0.1.3": "remove error dollar symbol in readme",
+        "0.1.2": "add RAM warning",
+        "0.1.1": "enable deterministic eval and inference",
+        "0.1.0": "Update deterministic results",
+        "0.0.9": "Update README Formatting",
+        "0.0.8": "enable deterministic training",
+        "0.0.7": "update benchmark on A100",
+        "0.0.6": "adapt to BundleWorkflow interface",
+        "0.0.5": "add name tag",
+        "0.0.4": "Fix evaluation",
+        "0.0.3": "Update to use MONAI 1.1.0",
+        "0.0.2": "Update The Torch Vision Transform",
+        "0.0.1": "initialize the model package structure"
+    },
+    "monai_version": "1.4.0",
+    "pytorch_version": "2.4.0",
+    "numpy_version": "1.24.4",
+    "optional_packages_version": {
+        "nibabel": "5.2.1",
+        "pytorch-ignite": "0.4.11",
+        "torchvision": "0.19.0"
+    },
+    "name": "Pathology nuclei classification",
+    "task": "Pathology Nuclei classification",
+    "description": "A pre-trained model for Nuclei Classification within Haematoxylin & Eosin stained histology images",
+    "authors": "MONAI team",
+    "copyright": "Copyright (c) MONAI Consortium",
+    "data_source": "consep_dataset.zip from https://warwick.ac.uk/fac/cross_fac/tia/data/hovernet",
+    "data_type": "png",
+    "image_classes": "RGB channel data, intensity scaled to [0, 1]",
+    "label_classes": "single channel data",
+    "pred_classes": "4 channels OneHot data, channel 0 is Other, channel 1 is Inflammatory, channel 2 is Epithelial, channel 3 is Spindle-Shaped",
+    "eval_metrics": {
+        "f1_score": 0.852
+    },
+    "intended_use": "This is an example, not to be used for diagnostic purposes",
+    "references": [
+        "S. Graham, Q. D. Vu, S. E. A. Raza, A. Azam, Y-W. Tsang, J. T. Kwak and N. Rajpoot. \"HoVer-Net: Simultaneous Segmentation and Classification of Nuclei in Multi-Tissue Histology Images.\" Medical Image Analysis, Sept. 2019. https://doi.org/10.1016/j.media.2019.101563"
+    ],
+    "network_data_format": {
+        "inputs": {
+            "image": {
+                "type": "magnitude",
+                "format": "RGB",
+                "modality": "regular",
+                "num_channels": 4,
+                "spatial_shape": [
+                    128,
+                    128
+                ],
+                "dtype": "float32",
+                "value_range": [
+                    0,
+                    1
+                ],
+                "is_patch_data": false,
+                "channel_def": {
+                    "0": "R",
+                    "1": "G",
+                    "2": "B",
+                    "3": "Mask"
+                }
+            }
+        },
+        "outputs": {
+            "pred": {
+                "type": "probabilities",
+                "format": "classes",
+                "num_channels": 4,
+                "spatial_shape": [
+                    1,
+                    4
+                ],
+                "dtype": "float32",
+                "value_range": [
+                    0,
+                    1,
+                    2,
+                    3
+                ],
+                "is_patch_data": false,
+                "channel_def": {
+                    "0": "Other",
+                    "1": "Inflammatory",
+                    "2": "Epithelial",
+                    "3": "Spindle-Shaped"
+                }
+            }
+        }
+    }
+}

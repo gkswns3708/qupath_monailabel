@@ -38,8 +38,38 @@ class HovernetNuclei(TaskConfig):
             download(name=bundle_name, version=version, bundle_dir=self.model_dir, source=zoo_source)
 
     def infer(self) -> Union[InferTask, Dict[str, InferTask]]:
-        task: InferTask = lib.infers.HovernetNuclei(self.bundle_path, self.conf)
-        return task
+        import glob as _glob
+
+        models_dir = os.path.join(self.bundle_path, "models")
+
+        # Original-mode checkpoints (*_5x5.pt) are incompatible with the
+        # fast-mode network.  They are handled by hovernet_nuclei_original.
+        checkpoints = sorted(
+            [
+                p for p in _glob.glob(os.path.join(models_dir, "*.pt"))
+                if not os.path.basename(p).endswith("_5x5.pt")
+            ],
+            key=os.path.getmtime,
+        )
+
+        if not checkpoints:
+            return lib.infers.HovernetNuclei(self.bundle_path, self.conf)
+
+        tasks: Dict[str, InferTask] = {}
+        for cp_path in checkpoints:
+            cp_name = os.path.basename(cp_path)   # e.g. "model_epoch=10.pt"
+            cp_base = cp_name[:-3]                 # remove ".pt"
+
+            # Keep the legacy "hovernet_nuclei" key for model.pt so existing
+            # QuPath sessions / training configs are not broken.
+            key = "hovernet_nuclei" if cp_name == "model.pt" else f"hovernet_nuclei__{cp_base}"
+
+            tasks[key] = lib.infers.HovernetNuclei(
+                self.bundle_path, self.conf, preset_checkpoint=cp_name
+            )
+            logger.info(f"Registered infer task '{key}' → {cp_name}")
+
+        return tasks
 
     def trainer(self) -> Optional[TrainTask]:
         task: TrainTask = lib.trainers.HovernetNuclei(self.bundle_path, self.conf)

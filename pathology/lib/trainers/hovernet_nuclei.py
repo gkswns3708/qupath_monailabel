@@ -124,12 +124,42 @@ class HovernetNuclei(BundleTrainTask):
     def _load_checkpoint(self, output_dir, pretrained, train_handlers):
         pass
 
+    def _resolve_pretrained(self, request):
+        """사용자가 선택한 model_filename을 stage0 pretrained 경로로 변환."""
+        if not request.get("pretrained", True):
+            logger.info("pretrained=False: skipping all checkpoints, using random initialization.")
+            return None
+
+        model_filename = request.get("model_filename")
+        if model_filename:
+            if isinstance(model_filename, list):
+                model_filename = model_filename[0]
+            candidate = os.path.join(self.bundle_path, "models", model_filename)
+            if os.path.exists(candidate):
+                logger.info(f"Using user-selected checkpoint for stage0: {candidate}")
+                return candidate
+        # 기본값: stage0 전용 checkpoint
+        fallback = os.path.join(self.bundle_path, "models", "stage0", "model.pt")
+        return fallback if os.path.exists(fallback) else None
+
+    def _final_filename(self, request):
+        """Determine the final checkpoint filename with _3x3 suffix."""
+        model_name = request.get("model_name")
+        if model_name:
+            if not model_name.endswith(".pt"):
+                model_name = f"{model_name}.pt"
+            # Ensure _3x3 suffix for fast mode
+            if not model_name.endswith("_3x3.pt"):
+                model_name = model_name.replace(".pt", "_3x3.pt")
+            return model_name
+        return "HoverNet_3x3.pt"
+
     def run_single_gpu(self, request, overrides):
         logger.info("+++++++++++ Running STAGE 0.........................")
         overrides["stage"] = 0
         overrides["network_def#freeze_encoder"] = True
-        pretrained = os.path.join(self.bundle_path, "models", "stage0", "model.pt")
-        if os.path.exists(pretrained):
+        pretrained = self._resolve_pretrained(request)
+        if pretrained:
             overrides["network_def#pretrained_url"] = pathlib.Path(pretrained).as_uri()
         super().run_single_gpu(request, overrides)
 
@@ -137,14 +167,17 @@ class HovernetNuclei(BundleTrainTask):
         overrides["stage"] = 1
         overrides["network_def#freeze_encoder"] = False
         overrides["network_def#pretrained_url"] = None
+        filename = self._final_filename(request)
+        overrides["train#handlers[2]#final_filename"] = filename
+        logger.info(f"Stage 1 final model will be saved as: {filename}")
         super().run_single_gpu(request, overrides)
 
     def run_multi_gpu(self, request, cmd, env):
         logger.info("+++++++++++ Running STAGE 0.........................")
         cmd1 = copy.deepcopy(cmd)
         cmd1.extend(["--stage", "0", "--network_def#freeze_encoder", "true"])
-        pretrained = os.path.join(self.bundle_path, "models", "stage0", "model.pt")
-        if os.path.exists(pretrained):
+        pretrained = self._resolve_pretrained(request)
+        if pretrained:
             cmd1.extend(["--network_def#pretrained_url", pathlib.Path(pretrained).as_uri()])
         super().run_multi_gpu(request, cmd1, env)
 
@@ -152,6 +185,9 @@ class HovernetNuclei(BundleTrainTask):
         cmd2 = copy.deepcopy(cmd)
         cmd2.extend(["--stage", "1", "--network_def#freeze_encoder", "false"])
         cmd2.extend(["--network_def#pretrained_url", "None"])
+        filename = self._final_filename(request)
+        cmd2.extend(["--train#handlers[2]#final_filename", filename])
+        logger.info(f"Stage 1 final model will be saved as: {filename}")
         super().run_multi_gpu(request, cmd2, env)
 
     def __call__(self, request, datastore: Datastore):

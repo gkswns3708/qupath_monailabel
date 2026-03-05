@@ -40,7 +40,7 @@ class NuClick(BundleTrainTask):
             datastore=datastore,
             cache_dir=cache_dir,
             source=source,
-            groups=None,
+            groups=groups,
             tile_size=self.tile_size,
             max_region=max_region,
             limit=request.get("dataset_limit", 0),

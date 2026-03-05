@@ -13,7 +13,7 @@ import logging
 from typing import Any, Callable, Dict, Sequence
 
 import numpy as np
-from lib.transforms import LoadImagePatchd, PostFilterLabeld
+from lib.transforms import BufferContoursd, LoadImagePatchd, PostFilterLabeld
 from monai.transforms import Activationsd, AsDiscreted, ScaleIntensityRangeD, SqueezeDimd, Transposed
 
 from monailabel.interfaces.tasks.infer_v2 import InferType
@@ -71,6 +71,7 @@ class SegmentationNuclei(BasicInferTask):
             SqueezeDimd(keys="pred", dim=0),
             PostFilterLabeld(keys="pred"),
             FindContoursd(keys="pred", labels=self.labels, max_poly_area=128 * 128),
+            BufferContoursd(keys="pred"),
         ]
 
     def writer(self, data, extension=None, dtype=None):
