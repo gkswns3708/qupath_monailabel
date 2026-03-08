@@ -42,27 +42,33 @@ class HovernetNuclei(TaskConfig):
 
         models_dir = os.path.join(self.bundle_path, "models")
 
-        # Original-mode checkpoints (*_5x5.pt) are incompatible with the
-        # fast-mode network.  They are handled by hovernet_nuclei_original.
+        # BundleInferTask requires model.pt to exist for initialization.
+        # Create symlink if missing (actual weights come from preset_checkpoint).
+        model_pt = os.path.join(models_dir, "model.pt")
+        if not os.path.exists(model_pt):
+            all_pts = sorted(_glob.glob(os.path.join(models_dir, "*.pt")))
+            if all_pts:
+                os.symlink(all_pts[0], model_pt)
+                logger.info(f"Created model.pt symlink → {os.path.basename(all_pts[0])}")
+
+        # Filter: exclude model.pt (placeholder symlink), 5x5 checkpoints
         checkpoints = sorted(
             [
                 p for p in _glob.glob(os.path.join(models_dir, "*.pt"))
-                if not os.path.basename(p).endswith("_5x5.pt")
+                if os.path.basename(p) != "model.pt"
+                and "5x5" not in os.path.basename(p)
             ],
             key=os.path.getmtime,
         )
 
         if not checkpoints:
-            return lib.infers.HovernetNuclei(self.bundle_path, self.conf)
+            return {"hovernet_nuclei_3x3": lib.infers.HovernetNuclei(self.bundle_path, self.conf)}
 
         tasks: Dict[str, InferTask] = {}
         for cp_path in checkpoints:
-            cp_name = os.path.basename(cp_path)   # e.g. "model_epoch=10.pt"
-            cp_base = cp_name[:-3]                 # remove ".pt"
-
-            # Keep the legacy "hovernet_nuclei" key for model.pt so existing
-            # QuPath sessions / training configs are not broken.
-            key = "hovernet_nuclei" if cp_name == "model.pt" else f"hovernet_nuclei__{cp_base}"
+            cp_name = os.path.basename(cp_path)
+            cp_base = cp_name[:-3]  # remove ".pt"
+            key = cp_base  # show checkpoint name directly in QuPath UI
 
             tasks[key] = lib.infers.HovernetNuclei(
                 self.bundle_path, self.conf, preset_checkpoint=cp_name

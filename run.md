@@ -1,1 +1,1 @@
- monailabel start_server --app apps/pathology --studies ./datasets/CoNSeP --conf models hovernet_nuclei,hovernet_nuclei_original --conf log_level DEBUG
+ monailabel start_server --app apps/pathology --studies ./datasets/ --conf models hovernet_nuclei,hovernet_nuclei_original --conf log_level DEBUG

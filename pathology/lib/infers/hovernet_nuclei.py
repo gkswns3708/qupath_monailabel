@@ -54,6 +54,12 @@ class HovernetNuclei(BundleInferTask):
             "Epithelial": (0, 0, 255),
             "Spindle-Shaped": (0, 255, 0),
         }
+
+        # BundleInferTask.__init__ may return early (missing config/model)
+        # without calling super().__init__(), leaving _config unset.
+        if not hasattr(self, "_config"):
+            return
+
         self._config["label_colors"] = self.label_colors
 
         # When a specific checkpoint is pre-selected, lock this task to that file.
@@ -86,7 +92,7 @@ class HovernetNuclei(BundleInferTask):
     def info(self) -> Dict[str, Any]:
         d = super().info()
         d["pathology"] = True
-        d["description"] = "HoVerNet Nuclei Segmentation (Fast Mode)"
+        d["description"] = "HoVerNet Nuclei Segmentation (3x3 Fast Mode)"
         return d
 
     def writer(self, data, extension=None, dtype=None):

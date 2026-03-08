@@ -37,6 +37,18 @@ class HovernetNuclei(BundleTrainTask):
         self.step_size = (164, 164)
         self.extract_type = "mirror"
 
+    def config(self):
+        c = super().config()
+        c["learning_rate"] = 0.0001
+        c["output_filename"] = ""
+        if "model_filename" in c and isinstance(c["model_filename"], list):
+            c["model_filename"] = [
+                f for f in c["model_filename"]
+                if f != "model.pt"
+                and "5x5" not in f
+            ]
+        return c
+
     def remove_file(path):
         if os.path.exists(path):
             os.remove(path)
@@ -142,19 +154,38 @@ class HovernetNuclei(BundleTrainTask):
         fallback = os.path.join(self.bundle_path, "models", "stage0", "model.pt")
         return fallback if os.path.exists(fallback) else None
 
+    @staticmethod
+    def _extract_base(name, marker="3x3"):
+        """Extract base up to and including the marker (e.g. '3x3').
+
+        'Qupath_HoverNet_3x3_finetuned' → 'Qupath_HoverNet_3x3'
+        'Qupath_HoverNet_3x3'           → 'Qupath_HoverNet_3x3'
+        """
+        idx = name.find(marker)
+        if idx >= 0:
+            return name[:idx + len(marker)]
+        return name
+
     def _final_filename(self, request):
-        """Determine the final checkpoint filename with _3x3 suffix."""
-        model_name = request.get("model_name")
-        if model_name:
-            if not model_name.endswith(".pt"):
-                model_name = f"{model_name}.pt"
-            # Ensure _3x3 suffix for fast mode
-            if not model_name.endswith("_3x3.pt"):
-                model_name = model_name.replace(".pt", "_3x3.pt")
-            return model_name
-        return "HoverNet_3x3.pt"
+        """Determine the final checkpoint filename as {base}_{tag}.pt."""
+        tag = request.get("output_filename", "").strip().replace(".pt", "") or "trained"
+
+        model_filename = request.get("model_filename")
+        if isinstance(model_filename, list):
+            model_filename = model_filename[0] if model_filename else None
+
+        if model_filename:
+            name = model_filename.replace(".pt", "")
+            base = self._extract_base(name, "3x3")
+            return f"{base}_{tag}.pt"
+
+        return f"3x3_HoverNet_{tag}.pt"
 
     def run_single_gpu(self, request, overrides):
+        lr = request.get("learning_rate")
+        if lr is not None:
+            overrides["learning_rate"] = float(lr)
+
         logger.info("+++++++++++ Running STAGE 0.........................")
         overrides["stage"] = 0
         overrides["network_def#freeze_encoder"] = True
@@ -168,14 +199,18 @@ class HovernetNuclei(BundleTrainTask):
         overrides["network_def#freeze_encoder"] = False
         overrides["network_def#pretrained_url"] = None
         filename = self._final_filename(request)
-        overrides["train#handlers[2]#final_filename"] = filename
+        overrides["ckpt_final_filename"] = filename
         logger.info(f"Stage 1 final model will be saved as: {filename}")
         super().run_single_gpu(request, overrides)
 
     def run_multi_gpu(self, request, cmd, env):
+        lr = request.get("learning_rate")
+
         logger.info("+++++++++++ Running STAGE 0.........................")
         cmd1 = copy.deepcopy(cmd)
         cmd1.extend(["--stage", "0", "--network_def#freeze_encoder", "true"])
+        if lr is not None:
+            cmd1.extend(["--learning_rate", str(float(lr))])
         pretrained = self._resolve_pretrained(request)
         if pretrained:
             cmd1.extend(["--network_def#pretrained_url", pathlib.Path(pretrained).as_uri()])
@@ -184,12 +219,36 @@ class HovernetNuclei(BundleTrainTask):
         logger.info("+++++++++++ Running STAGE 1.........................")
         cmd2 = copy.deepcopy(cmd)
         cmd2.extend(["--stage", "1", "--network_def#freeze_encoder", "false"])
+        if lr is not None:
+            cmd2.extend(["--learning_rate", str(float(lr))])
         cmd2.extend(["--network_def#pretrained_url", "None"])
         filename = self._final_filename(request)
-        cmd2.extend(["--train#handlers[2]#final_filename", filename])
+        cmd2.extend(["--ckpt_final_filename", filename])
         logger.info(f"Stage 1 final model will be saved as: {filename}")
         super().run_multi_gpu(request, cmd2, env)
 
     def __call__(self, request, datastore: Datastore):
         request["force_multi_gpu"] = True
+
+        # Check for duplicate checkpoint filename
+        filename = self._final_filename(request)
+        dest = os.path.join(self.bundle_path, "models", filename)
+        if os.path.exists(dest):
+            msg = (
+                f"Checkpoint '{filename}' already exists. "
+                "Please use a different output_filename (tag)."
+            )
+            logger.error(msg)
+            return {"error": msg}
+
+        # Check that the datastore has labeled data before starting training
+        datalist = datastore.datalist()
+        labeled = [d for d in datalist if d and d.get("label")]
+        if not labeled:
+            logger.error(
+                "No labeled images found in the datastore. "
+                "Please annotate some images before starting training."
+            )
+            return {"error": "No labeled images found in the datastore."}
+
         return super().__call__(request, datastore)

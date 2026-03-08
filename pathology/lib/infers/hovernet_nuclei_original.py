@@ -227,6 +227,11 @@ class HovernetNucleiOriginal(BundleInferTask):
             "Epithelial": (0, 0, 255),
             "Spindle-Shaped": (0, 255, 0),
         }
+        # BundleInferTask.__init__ may return early (missing config/model)
+        # without calling super().__init__(), leaving _config unset.
+        if not hasattr(self, "_config"):
+            return
+
         self._config["label_colors"] = self.label_colors
 
         # Store the TF2PT checkpoint path for loading the original model
@@ -242,9 +247,13 @@ class HovernetNucleiOriginal(BundleInferTask):
         """
         Override to use the original HoverNet model instead of MONAI's HoVerNet.
 
-        Loads from the TF2PT checkpoint (which has keys matching the original
-        model architecture) rather than the MONAI-format checkpoint.
+        When tf2pt_checkpoint is set, loads from the TF2PT checkpoint (original
+        model architecture). Otherwise (preset_checkpoint / MONAI-trained),
+        falls back to the base class which loads MONAI's HoVerNet.
         """
+        if not self.tf2pt_checkpoint:
+            return super()._get_network(device, data)
+
         cached = self._networks.get(device)
         checkpoint_path = self.tf2pt_checkpoint
 
@@ -323,7 +332,7 @@ class HovernetNucleiOriginal(BundleInferTask):
     def info(self) -> Dict[str, Any]:
         d = super().info()
         d["pathology"] = True
-        d["description"] = "HoVerNet Nuclei Segmentation (Original Mode - Original Architecture)"
+        d["description"] = "HoVerNet Nuclei Segmentation (5x5 Original Mode)"
         return d
 
     def writer(self, data, extension=None, dtype=None):

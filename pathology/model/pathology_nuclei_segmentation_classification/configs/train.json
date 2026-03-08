@@ -27,6 +27,7 @@
     "patch_size": 256,
     "out_size": 164,
     "ckpt_dir": "$@ckpt_dir_stage0 if @stage == 0 else @ckpt_dir_stage1",
+    "ckpt_final_filename": "model.pt",
     "network_def": {
         "_target_": "HoVerNet",
         "mode": "@hovernet_mode",
@@ -273,11 +274,10 @@
             "transforms": "$@train#preprocessing_transforms"
         },
         "dataset": {
-            "_target_": "CacheDataset",
+            "_target_": "PersistentDataset",
             "data": "$[{'image': i, 'label_inst': j, 'label_type': k} for i, j, k in zip(@train_images, @train_inst_map, @train_type_map)]",
             "transform": "@train#preprocessing",
-            "cache_rate": 1.0,
-            "num_workers": 4
+            "cache_dir": "$os.path.join(@bundle_root, 'cache', 'persistent_train')"
         },
         "dataloader": {
             "_target_": "DataLoader",
@@ -330,7 +330,7 @@
                 "save_interval": 10,
                 "epoch_level": true,
                 "save_final": true,
-                "final_filename": "model.pt"
+                "final_filename": "@ckpt_final_filename"
             },
             {
                 "_target_": "StatsHandler",
@@ -466,11 +466,10 @@
             "transforms": "$@validate#preprocessing_transforms"
         },
         "dataset": {
-            "_target_": "CacheDataset",
+            "_target_": "PersistentDataset",
             "data": "$[{'image': i, 'label_inst': j, 'label_type': k} for i, j, k in zip(@val_images, @val_inst_map, @val_type_map)]",
             "transform": "@validate#preprocessing",
-            "cache_rate": 1.0,
-            "num_workers": 4
+            "cache_dir": "$os.path.join(@bundle_root, 'cache', 'persistent_val')"
         },
         "dataloader": {
             "_target_": "DataLoader",

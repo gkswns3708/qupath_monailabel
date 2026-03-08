@@ -138,7 +138,7 @@ class PatchExtractor:
         padr = diff_w - padl
 
         pad_type = "reflect"
-        x = np.lib.pad(x, ((padt, padb), (padl, padr), (0, 0)), pad_type)
+        x = np.pad(x, ((padt, padb), (padl, padr), (0, 0)), pad_type)
         sub_patches = self.__extract_valid(x)
         return sub_patches
 

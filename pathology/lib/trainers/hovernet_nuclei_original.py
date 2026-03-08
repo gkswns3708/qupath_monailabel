@@ -32,17 +32,36 @@ class HovernetNucleiOriginal(HovernetNuclei):
         # PatchExtractor step_size matches out_size for original mode
         self.step_size = (80, 80)
 
+    def config(self):
+        # Skip HovernetNuclei.config() filtering (which removes 5x5),
+        # go directly to BundleTrainTask.config() and apply our own filter.
+        from monailabel.tasks.train.bundle import BundleTrainTask
+
+        c = BundleTrainTask.config(self)
+        c["learning_rate"] = 0.0001
+        c["output_filename"] = ""
+        if "model_filename" in c and isinstance(c["model_filename"], list):
+            c["model_filename"] = [
+                f for f in c["model_filename"]
+                if f != "model.pt"
+                and "3x3" not in f
+            ]
+        return c
+
     def _final_filename(self, request):
-        """Determine the final checkpoint filename with _5x5 suffix."""
-        model_name = request.get("model_name")
-        if model_name:
-            if not model_name.endswith(".pt"):
-                model_name = f"{model_name}.pt"
-            # Ensure _5x5 suffix for original mode
-            if not model_name.endswith("_5x5.pt"):
-                model_name = model_name.replace(".pt", "_5x5.pt")
-            return model_name
-        return "HoverNet_5x5.pt"
+        """Determine the final checkpoint filename as {base}_{tag}.pt."""
+        tag = request.get("output_filename", "").strip().replace(".pt", "") or "trained"
+
+        model_filename = request.get("model_filename")
+        if isinstance(model_filename, list):
+            model_filename = model_filename[0] if model_filename else None
+
+        if model_filename:
+            name = model_filename.replace(".pt", "")
+            base = self._extract_base(name, "5x5")
+            return f"{base}_{tag}.pt"
+
+        return f"5x5_HoverNet_{tag}.pt"
 
     def _resolve_pretrained(self, request):
         """Resolve pretrained checkpoint, defaulting to OFFICIAL original-mode weights."""
@@ -70,13 +89,16 @@ class HovernetNucleiOriginal(HovernetNuclei):
         return fallback if os.path.exists(fallback) else None
 
     def run_single_gpu(self, request, overrides):
+        lr = request.get("learning_rate")
+        if lr is not None:
+            overrides["learning_rate"] = float(lr)
+
         # Set original mode parameters
         overrides["hovernet_mode"] = "original"
         overrides["patch_size"] = 270
         overrides["out_size"] = 80
-        # Separate checkpoint directories to avoid mixing with fast-mode
+        # Stage0 uses separate dir; stage1 saves to models/ with 5x5_ prefix
         overrides["ckpt_dir_stage0"] = os.path.join(self.bundle_path, "models", "original_stage0")
-        overrides["ckpt_dir_stage1"] = os.path.join(self.bundle_path, "models", "original")
 
         logger.info("+++++++++++ Running STAGE 0 (original mode).........................")
         overrides["stage"] = 0
@@ -92,11 +114,13 @@ class HovernetNucleiOriginal(HovernetNuclei):
         overrides["network_def#freeze_encoder"] = False
         overrides["network_def#pretrained_url"] = None
         filename = self._final_filename(request)
-        overrides["train#handlers[2]#final_filename"] = filename
+        overrides["ckpt_final_filename"] = filename
         logger.info(f"Stage 1 final model will be saved as: {filename}")
         super(HovernetNuclei, self).run_single_gpu(request, overrides)
 
     def run_multi_gpu(self, request, cmd, env):
+        lr = request.get("learning_rate")
+
         logger.info("+++++++++++ Running STAGE 0 (original mode).........................")
         cmd1 = copy.deepcopy(cmd)
         cmd1.extend([
@@ -104,10 +128,11 @@ class HovernetNucleiOriginal(HovernetNuclei):
             "--patch_size", "270",
             "--out_size", "80",
             "--ckpt_dir_stage0", os.path.join(self.bundle_path, "models", "original_stage0"),
-            "--ckpt_dir_stage1", os.path.join(self.bundle_path, "models", "original"),
             "--stage", "0",
             "--network_def#freeze_encoder", "true",
         ])
+        if lr is not None:
+            cmd1.extend(["--learning_rate", str(float(lr))])
         pretrained = self._resolve_pretrained(request)
         if pretrained:
             cmd1.extend(["--network_def#pretrained_url", pathlib.Path(pretrained).as_uri()])
@@ -120,12 +145,13 @@ class HovernetNucleiOriginal(HovernetNuclei):
             "--patch_size", "270",
             "--out_size", "80",
             "--ckpt_dir_stage0", os.path.join(self.bundle_path, "models", "original_stage0"),
-            "--ckpt_dir_stage1", os.path.join(self.bundle_path, "models", "original"),
             "--stage", "1",
             "--network_def#freeze_encoder", "false",
             "--network_def#pretrained_url", "None",
         ])
+        if lr is not None:
+            cmd2.extend(["--learning_rate", str(float(lr))])
         filename = self._final_filename(request)
-        cmd2.extend(["--train#handlers[2]#final_filename", filename])
+        cmd2.extend(["--ckpt_final_filename", filename])
         logger.info(f"Stage 1 final model will be saved as: {filename}")
         super(HovernetNuclei, self).run_multi_gpu(request, cmd2, env)

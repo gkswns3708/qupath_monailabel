@@ -122,6 +122,20 @@ class MyApp(MONAILabelApp):
             asset_store_path=asset_store_path,
         )
 
+    def _refresh_infers(self):
+        """Re-scan model configs and register any new checkpoints."""
+        for n, task_config in self.models.items():
+            c = task_config.infer()
+            c = c if isinstance(c, dict) else {n: c}
+            for k, v in c.items():
+                if k not in self._infers:
+                    logger.info(f"+++ Discovered new model: {k} => {v}")
+                    self._infers[k] = v
+
+    def info(self):
+        self._refresh_infers()
+        return super().info()
+
     def init_infers(self) -> Dict[str, InferTask]:
         infers: Dict[str, InferTask] = {}
         #################################################
@@ -162,6 +176,12 @@ class MyApp(MONAILabelApp):
 
         return infers
 
+    # Map config key → user-facing trainer name
+    _TRAINER_NAMES = {
+        "hovernet_nuclei": "hovernet_nuclei_3x3",
+        "hovernet_nuclei_original": "hovernet_nuclei_5x5",
+    }
+
     def init_trainers(self) -> Dict[str, TrainTask]:
         trainers: Dict[str, TrainTask] = {}
         if strtobool(self.conf.get("skip_trainers", "false")):
@@ -172,8 +192,9 @@ class MyApp(MONAILabelApp):
             if not t:
                 continue
 
-            logger.info(f"+++ Adding Trainer:: {n} => {t}")
-            trainers[n] = t
+            key = self._TRAINER_NAMES.get(n, n)
+            logger.info(f"+++ Adding Trainer:: {key} => {t}")
+            trainers[key] = t
         return trainers
 
     def init_strategies(self) -> Dict[str, Strategy]:

@@ -15,6 +15,7 @@
     },
     "train#dataloader#sampler": "@train#sampler",
     "train#dataloader#shuffle": false,
+    "train#dataloader#num_workers": 0,
     "train#trainer#train_handlers": "$@train#train_handlers[: -3 if dist.get_rank() > 0 else None]",
     "validate#sampler": {
         "_target_": "DistributedSampler",
@@ -23,6 +24,7 @@
         "shuffle": false
     },
     "validate#dataloader#sampler": "@validate#sampler",
+    "validate#dataloader#num_workers": 0,
     "validate#evaluator#val_handlers": "$None if dist.get_rank() > 0 else @validate#handlers",
     "initialize": [
         "$import torch.distributed as dist",
