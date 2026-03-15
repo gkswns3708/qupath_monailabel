@@ -9,6 +9,9 @@
     "num_cpus": 2,
     "batch_size": 1,
     "sw_batch_size": 16,
+    "marker_threshold": 0.4,
+    "sobel_kernel_size": 21,
+    "marker_radius": 2,
     "hovernet_mode": "fast",
     "patch_size": 256,
     "out_size": 164,
@@ -90,9 +93,9 @@
             },
             {
                 "_target_": "HoVerNetInstanceMapPostProcessingd",
-                "sobel_kernel_size": 21,
-                "marker_threshold": 0.4,
-                "marker_radius": 2
+                "sobel_kernel_size": "@sobel_kernel_size",
+                "marker_threshold": "@marker_threshold",
+                "marker_radius": "@marker_radius"
             },
             {
                 "_target_": "HoVerNetNuclearTypePostProcessingd"
@@ -150,5 +153,10 @@
     ],
     "run": [
         "$@evaluator.run()"
-    ]
+    ],
+    "displayable_configs": {
+        "marker_threshold": "$@marker_threshold",
+        "sobel_kernel_size": "$@sobel_kernel_size",
+        "marker_radius": "$@marker_radius"
+    }
 }

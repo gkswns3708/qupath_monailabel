@@ -10,6 +10,7 @@
 # limitations under the License.
 
 import copy
+import json as _json
 import logging
 import os
 import random
@@ -44,8 +45,20 @@ def split_dataset(
     limit=0,
     randomize=True,
     crop_size=0,
+    label_tag="final",
 ):
     ds = datastore.datalist()
+
+    # If a non-default label tag is requested, remap label paths to that tag
+    if label_tag and label_tag != "final":
+        for d in ds:
+            try:
+                image_id = get_basename_no_ext(d.get("image", ""))
+                label_uri = datastore.get_label_uri(image_id, label_tag)
+                if label_uri and os.path.exists(label_uri):
+                    d["label"] = label_uri
+            except Exception:
+                pass  # keep original label if tag not found for this item
     output_dir = cache_dir
     if output_dir:
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -219,17 +232,12 @@ def split_dsa_dataset(datastore, d, output_dir, groups, tile_size, max_region=(1
     return dataset_json
 
 
-def split_local_dataset(datastore, d, output_dir, groups, tile_size, max_region=(10240, 10240)):
-    groups, item_id = _group_item(groups, d, output_dir)
-    local: LocalDatastore = datastore
-    item_id = local._to_id(item_id)[0]
-
-    dataset_json = []
-
+def _parse_xml_annotations(label_path, groups):
+    """Parse ASAP XML annotations and return (points, polygons)."""
     points = []
     polygons = {g: [] for g in groups}
 
-    annotations_xml = xml.etree.ElementTree.parse(d["label"]).getroot()
+    annotations_xml = xml.etree.ElementTree.parse(label_path).getroot()
     for annotation in annotations_xml.iter("Annotation"):
         g = annotation.get("PartOfGroup")
         g = g if g else "None"
@@ -249,6 +257,57 @@ def split_local_dataset(datastore, d, output_dir, groups, tile_size, max_region=
                 polygons[g] = []
             polygons[g].append(p)
             points.extend(p)
+
+    return points, polygons
+
+
+def _parse_geojson_annotations(label_path, groups):
+    """Parse GeoJSON FeatureCollection annotations and return (points, polygons)."""
+    points = []
+    polygons = {g: [] for g in groups}
+
+    with open(label_path) as f:
+        geojson = _json.load(f)
+
+    for feature in geojson.get("features", []):
+        geom = feature.get("geometry", {})
+        props = feature.get("properties", {})
+
+        if geom.get("type") != "Polygon":
+            continue
+
+        classification = props.get("classification", {})
+        g = classification.get("name", "None").lower()
+
+        if groups and g not in groups:
+            continue
+
+        coords = geom.get("coordinates", [[]])[0]  # exterior ring
+        p = [[int(c[0]), int(c[1])] for c in coords if len(c) >= 2]
+
+        if p:
+            if polygons.get(g) is None:
+                polygons[g] = []
+            polygons[g].append(p)
+            points.extend(p)
+
+    return points, polygons
+
+
+def split_local_dataset(datastore, d, output_dir, groups, tile_size, max_region=(10240, 10240)):
+    groups, item_id = _group_item(groups, d, output_dir)
+    local: LocalDatastore = datastore
+    item_id = local._to_id(item_id)[0]
+
+    dataset_json = []
+
+    label_path = d["label"]
+    ext = os.path.splitext(label_path)[1].lower()
+
+    if ext in (".geojson", ".json"):
+        points, polygons = _parse_geojson_annotations(label_path, groups)
+    else:
+        points, polygons = _parse_xml_annotations(label_path, groups)
 
     if not points:
         logger.warning(f"No Corresponding Labels {groups} found.")

@@ -122,19 +122,81 @@ class MyApp(MONAILabelApp):
             asset_store_path=asset_store_path,
         )
 
+    def _snapshot_checkpoints(self, models_dir):
+        """Return frozenset of (filename, mtime) for .pt files in models_dir."""
+        import glob as _glob
+        pts = _glob.glob(os.path.join(models_dir, "*.pt"))
+        return frozenset(
+            (os.path.basename(p), os.path.getmtime(p)) for p in pts
+        )
+
     def _refresh_infers(self):
-        """Re-scan model configs and register any new checkpoints."""
+        """Re-scan model configs and register new/changed checkpoints only."""
+        if not hasattr(self, "_checkpoint_cache"):
+            self._checkpoint_cache = {}
+            self._config_infer_keys = {}
+
         for n, task_config in self.models.items():
+            models_dir = os.path.join(task_config.bundle_path, "models")
+            current = self._snapshot_checkpoints(models_dir)
+
+            if current == self._checkpoint_cache.get(n):
+                continue  # no changes → skip expensive infer() call
+
+            logger.info(f"Checkpoint change detected for '{n}', refreshing...")
+            self._checkpoint_cache[n] = current
+
             c = task_config.infer()
             c = c if isinstance(c, dict) else {n: c}
+
+            # Remove old keys for this config that are no longer present
+            old_keys = self._config_infer_keys.get(n, set())
+            new_keys = set(c.keys())
+            for removed in old_keys - new_keys:
+                self._infers.pop(removed, None)
+                logger.info(f"--- Removed model: {removed}")
+
             for k, v in c.items():
-                if k not in self._infers:
+                self._infers[k] = v
+                if k not in old_keys:
                     logger.info(f"+++ Discovered new model: {k} => {v}")
-                    self._infers[k] = v
+
+            self._config_infer_keys[n] = new_keys
+
+    def label_tags(self):
+        """Return all label tags and their counts across images (cached 10s)."""
+        import time as _time
+        if not hasattr(self, "_label_tags_cache"):
+            self._label_tags_cache = None
+            self._label_tags_time = 0
+
+        now = _time.time()
+        if self._label_tags_cache is not None and (now - self._label_tags_time) < 10:
+            return self._label_tags_cache
+
+        ds = self._datastore
+        tags = {}
+        for image_id in ds.list_images():
+            try:
+                labels = ds.get_labels_by_image_id(image_id)
+                for tag in labels:
+                    tags[tag] = tags.get(tag, 0) + 1
+            except Exception:
+                pass
+        self._label_tags_cache = tags
+        self._label_tags_time = now
+        return tags
 
     def info(self):
         self._refresh_infers()
-        return super().info()
+        tags = self.label_tags()
+        # Inject available label tags into trainers for ConfigTable ComboBox
+        for trainer in self._trainers.values():
+            if hasattr(trainer, 'set_label_tags'):
+                trainer.set_label_tags(tags)
+        d = super().info()
+        d["label_tags"] = tags
+        return d
 
     def init_infers(self) -> Dict[str, InferTask]:
         infers: Dict[str, InferTask] = {}

@@ -29,7 +29,8 @@ class HovernetNuclei(BundleInferTask):
     This provides Inference Engine for pre-trained Hovernet segmentation + Classification model.
     """
 
-    def __init__(self, path: str, conf: Dict[str, str], preset_checkpoint: Optional[str] = None, **kwargs):
+    def __init__(self, path: str, conf: Dict[str, str], preset_checkpoint: Optional[str] = None,
+                 training_metadata: Optional[Dict] = None, **kwargs):
         super().__init__(
             path,
             conf,
@@ -61,6 +62,7 @@ class HovernetNuclei(BundleInferTask):
             return
 
         self._config["label_colors"] = self.label_colors
+        self.training_metadata = training_metadata or {}
 
         # When a specific checkpoint is pre-selected, lock this task to that file.
         # Removes model_filename from _config so _get_network() bypasses the
@@ -77,14 +79,20 @@ class HovernetNuclei(BundleInferTask):
         return t
 
     def post_transforms(self, data=None) -> Sequence[Callable]:
+        d = data or {}
+        min_size = int(d.get("min_size", 64))
+        min_hole = int(d.get("min_hole", 64))
+        max_poly_area = int(d.get("max_poly_area", 128 * 128))
+        buffer_distance = float(d.get("buffer_distance", 0.5))
+
         t = [x for x in super().post_transforms(data)]
         t.extend(
             [
                 RenameKeyd(source_key="type_map", target_key="pred"),
                 SqueezeDimd(keys="pred", dim=0),
-                PostFilterLabeld(keys="pred"),
-                FindContoursd(keys="pred", labels=self.labels, max_poly_area=128 * 128),
-                BufferContoursd(keys="pred"),
+                PostFilterLabeld(keys="pred", min_size=min_size, min_hole=min_hole),
+                FindContoursd(keys="pred", labels=self.labels, max_poly_area=max_poly_area),
+                BufferContoursd(keys="pred", distance=buffer_distance),
             ]
         )
         return t
@@ -93,6 +101,18 @@ class HovernetNuclei(BundleInferTask):
         d = super().info()
         d["pathology"] = True
         d["description"] = "HoVerNet Nuclei Segmentation (3x3 Fast Mode)"
+        d["configurable_thresholds"] = {
+            "min_size": {"default": 64, "description": "최소 객체 크기 (px)"},
+            "min_hole": {"default": 64, "description": "최소 hole 크기 (px)"},
+            "min_poly_area": {"default": 30, "description": "최소 polygon 면적 (px²)"},
+            "max_poly_area": {"default": 16384, "description": "최대 polygon 면적 (px²)"},
+            "buffer_distance": {"default": 0.5, "description": "contour 확장 거리 (px)"},
+            "marker_threshold": {"default": 0.4, "description": "HoVerNet marker 임계값"},
+            "sobel_kernel_size": {"default": 21, "description": "Sobel 커널 크기"},
+            "marker_radius": {"default": 2, "description": "marker dilation 반경"},
+        }
+        if self.training_metadata:
+            d["training_metadata"] = self.training_metadata
         return d
 
     def writer(self, data, extension=None, dtype=None):
