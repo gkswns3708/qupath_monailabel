@@ -97,10 +97,13 @@ class OriginalHoVerNetPostProcessd(MapTransform):
             Set True for QuPath pipeline, False for direct use (e.g. verify scripts).
     """
 
-    def __init__(self, keys="pred", nr_types=5, undo_spatial_transpose=False):
+    def __init__(self, keys="pred", nr_types=5, undo_spatial_transpose=False,
+                 sobel_kernel_size=21, marker_threshold=0.4):
         super().__init__(keys)
         self.nr_types = nr_types
         self.undo_spatial_transpose = undo_spatial_transpose
+        self.sobel_kernel_size = sobel_kernel_size
+        self.marker_threshold = marker_threshold
 
         # Import original post-processing
         if "/app/hover_net" not in sys.path:
@@ -149,7 +152,9 @@ class OriginalHoVerNetPostProcessd(MapTransform):
 
         # Run original post-processing (watershed + type assignment)
         pred_inst, inst_info = self._orig_process(
-            pred_map, nr_types=self.nr_types, return_centroids=True
+            pred_map, nr_types=self.nr_types, return_centroids=True,
+            sobel_kernel_size=self.sobel_kernel_size,
+            marker_threshold=self.marker_threshold,
         )
 
         # Build type_map from instance info
@@ -201,6 +206,7 @@ class HovernetNucleiOriginal(BundleInferTask):
         conf: Dict[str, str],
         tf2pt_checkpoint: Optional[str] = None,
         preset_checkpoint: Optional[str] = None,
+        training_metadata: Optional[Dict] = None,
         **kwargs,
     ):
         super().__init__(
@@ -233,6 +239,7 @@ class HovernetNucleiOriginal(BundleInferTask):
             return
 
         self._config["label_colors"] = self.label_colors
+        self.training_metadata = training_metadata or {}
 
         # Store the TF2PT checkpoint path for loading the original model
         self.tf2pt_checkpoint = tf2pt_checkpoint
@@ -300,15 +307,31 @@ class HovernetNucleiOriginal(BundleInferTask):
     def post_transforms(self, data=None) -> Sequence[Callable]:
         # Use instance_map (unique ID per nucleus) for contour extraction instead
         # of type_map (which merges adjacent same-type nuclei into one polygon).
+        d = data or {}
+        min_size = int(d.get("min_size", 64))
+        min_hole = int(d.get("min_hole", 64))
+        min_poly_area = int(d.get("min_poly_area", 30))
+        max_poly_area = int(d.get("max_poly_area", 128 * 128))
+        buffer_distance = float(d.get("buffer_distance", 0.5))
+        marker_threshold = float(d.get("marker_threshold", 0.4))
+        sobel_kernel_size = int(d.get("sobel_kernel_size", 21))
+
         return [
-            OriginalHoVerNetPostProcessd(keys="pred", nr_types=5),
+            OriginalHoVerNetPostProcessd(
+                keys="pred", nr_types=5,
+                sobel_kernel_size=sobel_kernel_size,
+                marker_threshold=marker_threshold,
+            ),
             FindContoursFromInstanceMapd(
                 keys="pred",
                 labels=self.labels,
                 label_colors=self.label_colors,
-                max_poly_area=128 * 128,
+                min_poly_area=min_poly_area,
+                max_poly_area=max_poly_area,
+                min_size=min_size,
+                min_hole=min_hole,
             ),
-            BufferContoursd(keys="pred"),
+            BufferContoursd(keys="pred", distance=buffer_distance),
         ]
 
     def inferer(self, data=None) -> Inferer:
@@ -333,6 +356,18 @@ class HovernetNucleiOriginal(BundleInferTask):
         d = super().info()
         d["pathology"] = True
         d["description"] = "HoVerNet Nuclei Segmentation (5x5 Original Mode)"
+        d["configurable_thresholds"] = {
+            "min_size": {"default": 64, "description": "최소 객체 크기 (px)"},
+            "min_hole": {"default": 64, "description": "최소 hole 크기 (px)"},
+            "min_poly_area": {"default": 30, "description": "최소 polygon 면적 (px²)"},
+            "max_poly_area": {"default": 16384, "description": "최대 polygon 면적 (px²)"},
+            "buffer_distance": {"default": 0.5, "description": "contour 확장 거리 (px)"},
+            "marker_threshold": {"default": 0.4, "description": "HoVerNet marker 임계값"},
+            "sobel_kernel_size": {"default": 21, "description": "Sobel 커널 크기"},
+            "marker_radius": {"default": 2, "description": "marker dilation 반경"},
+        }
+        if self.training_metadata:
+            d["training_metadata"] = self.training_metadata
         return d
 
     def writer(self, data, extension=None, dtype=None):

@@ -197,6 +197,8 @@ class FindContoursFromInstanceMapd(MapTransform):
         label_colors: dict = None,
         min_poly_area: int = 30,
         max_poly_area: int = 0,
+        min_size: int = 0,
+        min_hole: int = 0,
         result: str = "result",
         result_output_key: str = "annotation",
     ):
@@ -205,6 +207,8 @@ class FindContoursFromInstanceMapd(MapTransform):
         self.label_colors = label_colors or {}
         self.min_poly_area = min_poly_area
         self.max_poly_area = max_poly_area
+        self.min_size = min_size
+        self.min_hole = min_hole
         self.result = result
         self.result_output_key = result_output_key
         self._type_to_label = {v: k for k, v in labels.items()}
@@ -241,6 +245,16 @@ class FindContoursFromInstanceMapd(MapTransform):
                 continue
 
             mask = (inst_map == inst_id).astype(np.uint8)
+
+            # Filter small instances by pixel count
+            if self.min_size > 0 and np.sum(mask) < self.min_size:
+                continue
+
+            # Fill small holes in instance mask
+            if self.min_hole > 0:
+                filled = remove_small_holes(mask.astype(bool), area_threshold=self.min_hole)
+                mask = filled.astype(np.uint8)
+
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
             for contour in contours:

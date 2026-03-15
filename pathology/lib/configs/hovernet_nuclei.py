@@ -9,6 +9,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json as _json
 import logging
 import os
 from typing import Any, Dict, Optional, Union
@@ -23,6 +24,18 @@ from monailabel.interfaces.tasks.infer_v2 import InferTask
 from monailabel.interfaces.tasks.train import TrainTask
 
 logger = logging.getLogger(__name__)
+
+
+def _is_final_checkpoint(filepath: str) -> bool:
+    """Return True only for final trained checkpoints, excluding intermediates."""
+    base = os.path.basename(filepath)
+    if base == "model.pt":
+        return False
+    if "epoch=" in base:
+        return False
+    if "key_metric=" in base:
+        return False
+    return True
 
 
 class HovernetNuclei(TaskConfig):
@@ -51,11 +64,11 @@ class HovernetNuclei(TaskConfig):
                 os.symlink(all_pts[0], model_pt)
                 logger.info(f"Created model.pt symlink → {os.path.basename(all_pts[0])}")
 
-        # Filter: exclude model.pt (placeholder symlink), 5x5 checkpoints
+        # Filter: exclude intermediates (epoch/key_metric checkpoints), model.pt symlink, 5x5
         checkpoints = sorted(
             [
                 p for p in _glob.glob(os.path.join(models_dir, "*.pt"))
-                if os.path.basename(p) != "model.pt"
+                if _is_final_checkpoint(p)
                 and "5x5" not in os.path.basename(p)
             ],
             key=os.path.getmtime,
@@ -70,8 +83,19 @@ class HovernetNuclei(TaskConfig):
             cp_base = cp_name[:-3]  # remove ".pt"
             key = cp_base  # show checkpoint name directly in QuPath UI
 
+            # Load training metadata if available
+            meta_path = cp_path.replace(".pt", ".meta.json")
+            training_metadata = {}
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path) as f:
+                        training_metadata = _json.load(f)
+                except Exception:
+                    pass
+
             tasks[key] = lib.infers.HovernetNuclei(
-                self.bundle_path, self.conf, preset_checkpoint=cp_name
+                self.bundle_path, self.conf, preset_checkpoint=cp_name,
+                training_metadata=training_metadata,
             )
             logger.info(f"Registered infer task '{key}' → {cp_name}")
 

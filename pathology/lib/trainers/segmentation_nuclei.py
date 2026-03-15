@@ -71,6 +71,7 @@ class SegmentationNuclei(BasicTrainTask):
         max_region = request.get("dataset_max_region", (10240, 10240))
         max_region = (max_region, max_region) if isinstance(max_region, int) else max_region[:2]
 
+        label_tag = request.get("label_tag", "final")
         return split_dataset(
             datastore=datastore,
             cache_dir=cache_dir,
@@ -81,6 +82,7 @@ class SegmentationNuclei(BasicTrainTask):
             limit=request.get("dataset_limit", 0),
             randomize=request.get("dataset_randomize", True),
             crop_size=self.patch_size,
+            label_tag=label_tag,
         )
 
     def train_pre_transforms(self, context: Context):

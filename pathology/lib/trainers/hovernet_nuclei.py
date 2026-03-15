@@ -9,9 +9,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import copy
+import json as _json
 import logging
 import os
 import pathlib
+from datetime import datetime
 from typing import Dict, Optional
 
 import numpy as np
@@ -36,6 +38,11 @@ class HovernetNuclei(BundleTrainTask):
         self.patch_size = (540, 540)
         self.step_size = (164, 164)
         self.extract_type = "mirror"
+        self._available_label_tags = None
+
+    def set_label_tags(self, tags_dict):
+        """Called by MyApp.info() to inject available label tags for ConfigTable ComboBox."""
+        self._available_label_tags = tags_dict
 
     def config(self):
         c = super().config()
@@ -46,7 +53,18 @@ class HovernetNuclei(BundleTrainTask):
                 f for f in c["model_filename"]
                 if f != "model.pt"
                 and "5x5" not in f
+                and "epoch=" not in f
+                and "key_metric=" not in f
             ]
+        # label_tag: list → ConfigTable renders as ComboBox; string → TextField fallback
+        if self._available_label_tags:
+            tag_list = list(self._available_label_tags.keys())
+            if "final" in tag_list:
+                tag_list.remove("final")
+            tag_list.insert(0, "final")
+            c["label_tag"] = tag_list
+        else:
+            c["label_tag"] = "final"
         return c
 
     def remove_file(path):
@@ -69,6 +87,7 @@ class HovernetNuclei(BundleTrainTask):
             "spindle-shaped": 4,
         }
 
+        label_tag = request.get("label_tag", "final")
         ds = split_dataset(
             datastore=datastore,
             cache_dir=cache_dir,
@@ -78,6 +97,7 @@ class HovernetNuclei(BundleTrainTask):
             max_region=max_region,
             limit=request.get("dataset_limit", 0),
             randomize=request.get("dataset_randomize", True),
+            label_tag=label_tag,
         )
         logger.info(f"Split data (len: {len(ds)}) based on each nuclei")
 
@@ -181,6 +201,34 @@ class HovernetNuclei(BundleTrainTask):
 
         return f"3x3_HoverNet_{tag}.pt"
 
+    def _save_checkpoint_metadata(self, request, filename):
+        """Save training metadata alongside the checkpoint file."""
+        metadata = {
+            "checkpoint_filename": filename,
+            "created_at": datetime.now().isoformat(),
+            "dataset_tag": request.get("label_tag", "final"),
+            "dataset_source": request.get("dataset_source"),
+            "dataset_limit": request.get("dataset_limit", 0),
+            "hyperparameters": {
+                "learning_rate": request.get("learning_rate", 0.0001),
+                "max_epochs": request.get("max_epochs"),
+                "train_batch_size": request.get("train_batch_size"),
+                "val_split": request.get("val_split"),
+                "pretrained": request.get("pretrained", True),
+            },
+            "model_filename": request.get("model_filename"),
+            "output_filename": request.get("output_filename", ""),
+        }
+        meta_path = os.path.join(
+            self.bundle_path, "models", filename.replace(".pt", ".meta.json")
+        )
+        try:
+            with open(meta_path, "w") as f:
+                _json.dump(metadata, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved checkpoint metadata: {meta_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save checkpoint metadata: {e}")
+
     def run_single_gpu(self, request, overrides):
         lr = request.get("learning_rate")
         if lr is not None:
@@ -202,6 +250,7 @@ class HovernetNuclei(BundleTrainTask):
         overrides["ckpt_final_filename"] = filename
         logger.info(f"Stage 1 final model will be saved as: {filename}")
         super().run_single_gpu(request, overrides)
+        self._save_checkpoint_metadata(request, filename)
 
     def run_multi_gpu(self, request, cmd, env):
         lr = request.get("learning_rate")
@@ -226,6 +275,7 @@ class HovernetNuclei(BundleTrainTask):
         cmd2.extend(["--ckpt_final_filename", filename])
         logger.info(f"Stage 1 final model will be saved as: {filename}")
         super().run_multi_gpu(request, cmd2, env)
+        self._save_checkpoint_metadata(request, filename)
 
     def __call__(self, request, datastore: Datastore):
         request["force_multi_gpu"] = True
